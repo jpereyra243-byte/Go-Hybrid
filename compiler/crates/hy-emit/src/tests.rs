@@ -1239,7 +1239,7 @@ fn add(s set[int], v int) {
     s.insert(v)
 }
 
-struct Graph {
+struct graph {
     seen set[int]
 }
 
@@ -1252,7 +1252,7 @@ fn main() {
     d.insert(1)
 
     var s set[int]
-    var g Graph
+    var g graph
     p := new(set[int])
 }
 "#;
@@ -1273,7 +1273,7 @@ fn main() {
         go
     );
     assert!(
-        go.contains("var g Graph = Graph{seen: set[int]{m: map[int]struct{}{}}}"),
+        go.contains("var g graph = graph{seen: set[int]{m: map[int]struct{}{}}}"),
         "struct carrying set field must initialize field m: map[T]struct{{}}:\n{}",
         go
     );
