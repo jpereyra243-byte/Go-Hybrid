@@ -11,6 +11,8 @@ import contextlib
 import importlib.util
 import io
 import os
+import shlex
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +26,28 @@ SPEC.loader.exec_module(guard)
 
 
 class PatternExtractionTests(unittest.TestCase):
+    def test_or_list_discovery_is_not_complete_registration(self):
+        for suffix in (" || true", "||true", " || echo ignored"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(guard.registered_patterns(
+                    "python3 -m unittest discover -s tools -p test_broken.py" + suffix), [])
+
+    def test_or_list_direct_script_is_not_complete_registration(self):
+        for command in (
+            "python3 tests/test_broken.py || true",
+            "run: python3 tests/test_broken.py||true",
+            'run: "python3 tests/test_broken.py || true"',
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(guard.is_registered_direct("tests/test_broken.py", command))
+
+    def test_or_in_quoted_pattern_or_comment_is_literal(self):
+        self.assertEqual(guard.registered_patterns(
+            "python3 -m unittest discover -s tools -p test_broken.py # || true"),
+            ["test_broken.py"])
+        self.assertEqual(guard.registered_patterns(
+            "python3 -m unittest discover -s tools -p 'test_||_literal.py'"),
+            ["test_||_literal.py"])
     def test_quoted_and_bare_patterns_are_both_read(self):
         workflow = (
             "          python3 -m unittest discover -s tools/fuzz -p 'test_hyfuzz.py'\n"
@@ -84,7 +108,7 @@ class PatternExtractionTests(unittest.TestCase):
             "tests/test_live.py", "  run: python3 tests/test_live.py\n"))
 
     def test_later_shell_command_does_not_supply_discovery_patterns(self):
-        for separator in (" && ", "&&", ";", " || ", " | "):
+        for separator in (" && ", "&&", ";", " | "):
             with self.subTest(separator=separator):
                 self.assertEqual(guard.registered_patterns(
                     "python3 -m unittest discover -s tools -p test_live.py"
@@ -106,6 +130,31 @@ class PatternExtractionTests(unittest.TestCase):
 
 
 class RegistrationTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "requires Bash on POSIX to verify shell exit status")
+    def test_real_failure_masked_by_or_must_not_register(self):
+        for direct in (False, True):
+            with self.subTest(direct=direct):
+                rel = "tests/test_broken.py" if direct else "tools/test_broken.py"
+                args = rel if direct else "-m unittest discover -s tools -p test_broken.py"
+                unmasked = shlex.quote(sys.executable) + " " + args
+                command = unmasked + " || true"
+                root, text = self.build(command, [rel])
+                (root / rel).write_text(
+                    "import unittest\nclass Broken(unittest.TestCase):\n"
+                    "    def test_failure(self): self.fail('failure must reach CI')\n"
+                    "if __name__ == '__main__': unittest.main()\n", encoding="utf-8")
+                masked = subprocess.run(
+                    [shutil.which("bash"), "-e", "-o", "pipefail", "-c", command],
+                    cwd=root, capture_output=True, text=True, timeout=10)
+                self.assertEqual(masked.returncode, 0, masked.stderr)
+                self.assertIn("FAILED", masked.stderr)
+                self.assertEqual([path for path, _ in guard.unregistered(root, text)], [rel])
+                control = subprocess.run(
+                    [shutil.which("bash"), "-e", "-o", "pipefail", "-c", unmasked],
+                    cwd=root, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(control.returncode, 0, control.stderr)
+                self.assertEqual(guard.unregistered(root, unmasked), [])
+                self.assertEqual(guard.unregistered(root, text + "\n" + unmasked), [])
     def build(self, workflow, suites):
         """Write a temp root with `suites` and return (root, workflow_text)."""
         temporary = tempfile.TemporaryDirectory(prefix="hybrid-registration-")

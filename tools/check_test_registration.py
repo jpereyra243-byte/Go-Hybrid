@@ -21,7 +21,11 @@ reference it, and fails closed on any file no reference reaches:
 Only explicit single-line Python invocations count. Comments, echoed text,
 step names, interpreter flags, chained later commands, and paths passed as
 arguments to other scripts register nothing. This is not a general
-shell/YAML interpreter.
+shell/YAML interpreter. A command immediately followed by an OR-list
+(||) does not count as a registration: even if the test runs, a failure
+may be swallowed by the fallback. Use a separate unmasked invocation to
+register that suite; arbitrary fallback exit-status analysis is outside
+this guard's single-command scope.
 
 Usage: python3 tools/check_test_registration.py [--workflow PATH] [--root DIR]
 Exit:  0 = every test file is registered; 1 = unregistered file(s); 2 = guard misuse.
@@ -69,6 +73,8 @@ def python_commands(workflow_text):
             # -p flag must never become another unittest discovery pattern.
             end = next((i for i, token in enumerate(tokens)
                         if token and all(c in ";&|<>()" for c in token)), len(tokens))
+            if end < len(tokens) and tokens[end] == "||":
+                continue
             arguments = tokens[1:end]
             while arguments:
                 option = arguments[0]
